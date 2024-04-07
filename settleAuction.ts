@@ -18,6 +18,19 @@ interface AuctionBid {
   fullyAllocated?: boolean;
 }
 
+function sortBidsByDepositAmount(bids: any) {
+    return bids.sort((a: any, b: any) => {
+      if (Number(a.depositAmount) < Number(b.depositAmount)) {
+        return -1; // a comes first
+      } else if (Number(a.depositAmount) > Number(b.depositAmount)) {
+        return 1; // b comes first
+      } else {
+        return 0; // no sorting, as they are equal
+      }
+    });
+  }
+
+
 export const settleAuctionOffChain = async (
   auctionBids_: AuctionBid[],
   supplyForSale: number,
@@ -27,7 +40,10 @@ export const settleAuctionOffChain = async (
   let totalDepositOfQualifyingBids = 0;
   let discount = 0.97;
 
-  const auctionBids = removeDuplicates(auctionBids_);
+  const auctionBids = sortBidsByDepositAmount(removeDuplicates(auctionBids_));
+
+
+  auctionBids = sortBidsByDepositAmount(auctionBids);
 
   for (const bid of auctionBids) {
     if (Number(bid.depositAmount.toString()) > 0) {
@@ -119,31 +135,46 @@ export const settleAuctionOffChain = async (
     }
   }
   let totalReallocated = 0;
-  if (remainingSupply > 0) {
+ while (remainingSupply > 0) {
     const qualifyingBids = auctionBids.filter(
       (bid: any) => bid.fullyAllocated != true
     );
 
+    if (qualifyingBids.length === 0) {
+      break;
+    }
+
     for (let bid of qualifyingBids) {
+      const previousAllocation = Number(bid.tokensWon) * finalAuctionPrice;
+      const additionalTokenRequirement =
+        (Number(bid.depositAmount.toString()) - previousAllocation) /
+        finalAuctionPrice;
+      const fairShareAllocation = remainingSupply / qualifyingBids.length;
       const additonalTokenReallocation = Math.floor(
-        Math.min(
-          Number(bid.depositAmount.toString()) / finalAuctionPrice,
-          remainingSupply / qualifyingBids.length
-        )
+        Math.min(additionalTokenRequirement, fairShareAllocation)
       );
+
+      if (additonalTokenReallocation <= 0) {
+        bid.fullyAllocated = true; // Mark bid as fully allocated to exclude in next iteration
+        continue;
+      }
+
+      remainingSupply -= additonalTokenReallocation;
 
       bid.tokensWon += additonalTokenReallocation;
 
       totalReallocated += additonalTokenReallocation;
+
       let excessDeposit =
         Number(bid.depositAmount.toString()) -
         bid.tokensWon * finalAuctionPrice;
+
       //refundAmount is in the unit of wei
       bid.refundAmount = excessDeposit > 0 ? excessDeposit : 0;
-      bid.fullyAllocated = true;
+      if (additonalTokenReallocation == additionalTokenRequirement) {
+        bid.fullyAllocated = true;
+      }
     }
-
-    remainingSupply -= totalReallocated;
   }
 
   return auctionBids;
