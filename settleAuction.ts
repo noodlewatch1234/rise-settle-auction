@@ -18,18 +18,7 @@ interface AuctionBid {
   fullyAllocated?: boolean;
 }
 
-function sortBidsByDepositAmount(bids: any) {
-    return bids.sort((a: any, b: any) => {
-      if (Number(a.depositAmount) < Number(b.depositAmount)) {
-        return -1; // a comes first
-      } else if (Number(a.depositAmount) > Number(b.depositAmount)) {
-        return 1; // b comes first
-      } else {
-        return 0; // no sorting, as they are equal
-      }
-    });
-  }
-
+const riseBurnerAddress = "0x38994C616DA41B0aE7183ed0DbD370dC85c5565A";
 
 export const settleAuctionOffChain = async (
   auctionBids_: AuctionBid[],
@@ -40,10 +29,16 @@ export const settleAuctionOffChain = async (
   let totalDepositOfQualifyingBids = 0;
   let discount = 0.97;
 
-  const auctionBids = sortBidsByDepositAmount(removeDuplicates(auctionBids_));
+  const tempAuctionBids = removeDuplicates(auctionBids_);
 
-
-  auctionBids = sortBidsByDepositAmount(auctionBids);
+  //This sets the final price to start at 80% of the auction supply value
+  //This is essentially the burn contract address bidding
+  //And another unsold RISE will be allocated to this address to get burned
+  const auctionBids = modifyFinalAuctionPrice(
+    tempAuctionBids,
+    marketPrice_,
+    supplyForSale
+  );
 
   for (const bid of auctionBids) {
     if (Number(bid.depositAmount.toString()) > 0) {
@@ -135,7 +130,7 @@ export const settleAuctionOffChain = async (
     }
   }
   let totalReallocated = 0;
- while (remainingSupply > 0) {
+  while (remainingSupply > 0) {
     const qualifyingBids = auctionBids.filter(
       (bid: any) => bid.fullyAllocated != true
     );
@@ -167,6 +162,7 @@ export const settleAuctionOffChain = async (
 
       let excessDeposit =
         Number(bid.depositAmount.toString()) -
+        //@ts-ignore
         bid.tokensWon * finalAuctionPrice;
 
       //refundAmount is in the unit of wei
@@ -177,7 +173,15 @@ export const settleAuctionOffChain = async (
     }
   }
 
-  return auctionBids;
+  //Makes sure the price modifier does not get any eth.
+  return auctionBids.map((item) => {
+    if (item.bidder === riseBurnerAddress) {
+      item.refundAmount = 0;
+      item.depositAmount = 0;
+      item.maxPrice = 0;
+    }
+    return item;
+  });
 };
 
 function removeDuplicates(bids: AuctionBid[]): AuctionBid[] {
@@ -209,3 +213,27 @@ function removeDuplicates(bids: AuctionBid[]): AuctionBid[] {
 
   return uniqueBids;
 }
+
+const modifyFinalAuctionPrice = (
+  auctionBids: any[],
+  risePrice: string,
+  supplyForSale: number
+) => {
+  const amountToAdd = BigInt(
+    Number(risePrice.toString()) * supplyForSale * 0.8
+  );
+
+  const filtered = auctionBids.filter(
+    (bid) => bid.bidder !== riseBurnerAddress
+  );
+
+  filtered.unshift({
+    maxPrice: 10000000000000000000000n,
+    depositAmount: amountToAdd,
+    tokensWon: 0n,
+    refundAmount: 0n,
+    bidder: riseBurnerAddress,
+  });
+
+  return filtered;
+};
